@@ -1,38 +1,42 @@
-from openai import OpenAI
 import faiss
 import numpy as np
-import pickle
 import os
 from typing import List, Dict
 import logging
-from dotenv import load_dotenv
-
-load_dotenv()
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Initialize sentence transformer model
+embedding_model = None
 
 # Global variables for embeddings storage
 embedding_storage = {}
 text_storage = {}
 
+def get_embedding_model():
+    """Initialize and return the embedding model"""
+    global embedding_model
+    if embedding_model is None:
+        # Using a high-quality sentence transformer model
+        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Loaded sentence transformer model: all-MiniLM-L6-v2")
+    return embedding_model
+
 async def create_embeddings(document_chunks: List[Dict], execution_id: str):
     """
-    Create embeddings for document chunks using OpenAI
+    Create embeddings for document chunks using Sentence Transformers
     """
     try:
+        model = get_embedding_model()
         texts = [chunk["text"] for chunk in document_chunks]
         
-        # Create embeddings using OpenAI (new API)
-        response = client.embeddings.create(
-            input=texts,
-            model="text-embedding-3-large"
-        )
+        # Create embeddings using Sentence Transformers
+        embeddings = model.encode(texts, convert_to_numpy=True)
+        embeddings_array = embeddings.astype('float32')
         
-        embeddings = [item.embedding for item in response.data]
-        embeddings_array = np.array(embeddings).astype('float32')
+        # Normalize embeddings for better similarity search
+        faiss.normalize_L2(embeddings_array)
         
         # Create FAISS index
         dimension = embeddings_array.shape[1]
@@ -54,13 +58,13 @@ async def search_similar(query: str, execution_id: str, k: int = 5) -> List[Dict
     Search for similar chunks using query embedding
     """
     try:
-        # Get query embedding (new API)
-        response = client.embeddings.create(
-            input=[query],
-            model="text-embedding-3-large"
-        )
+        model = get_embedding_model()
         
-        query_embedding = np.array([response.data[0].embedding]).astype('float32')
+        # Get query embedding
+        query_embedding = model.encode([query], convert_to_numpy=True).astype('float32')
+        
+        # Normalize query embedding
+        faiss.normalize_L2(query_embedding)
         
         # Search in FAISS index
         index = embedding_storage.get(execution_id)

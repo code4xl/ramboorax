@@ -25,4 +25,4 @@ app.add_middleware(
 
 # Include routers
 # app.include_router(document_processing.router, prefix="/api/documents", tags=["Document Processing"])
-app.include_router(query_retrieval.router, prefix="/hackrx", tags=["Query Retrieval"])
+app.include_router(query_retrieval.router, prefix="/api/v1/hackrx", tags=["Query Retrieval"])
