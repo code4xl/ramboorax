@@ -26,3 +26,17 @@ app.add_middleware(
 # Include routers
 # app.include_router(document_processing.router, prefix="/api/documents", tags=["Document Processing"])
 app.include_router(query_retrieval.router, prefix="/api/v1/hackrx", tags=["Query Retrieval"])
+
+@app.get("/")
+async def root():
+    """Root endpoint for health check"""
+    return {
+        "message": "LLM-Powered Query Retrieval System",
+        "status": "healthy",
+        "docs": "/docs"
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Google Cloud Run"""
+    return {"status": "healthy"}
