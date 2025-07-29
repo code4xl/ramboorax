@@ -1,12 +1,18 @@
-import openai
+from openai import OpenAI
 import faiss
 import numpy as np
 import pickle
 import os
 from typing import List, Dict
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Global variables for embeddings storage
 embedding_storage = {}
@@ -17,17 +23,15 @@ async def create_embeddings(document_chunks: List[Dict], execution_id: str):
     Create embeddings for document chunks using OpenAI
     """
     try:
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        
         texts = [chunk["text"] for chunk in document_chunks]
         
-        # Create embeddings using OpenAI
-        response = await openai.Embedding.acreate(
+        # Create embeddings using OpenAI (new API)
+        response = client.embeddings.create(
             input=texts,
             model="text-embedding-3-large"
         )
         
-        embeddings = [item["embedding"] for item in response["data"]]
+        embeddings = [item.embedding for item in response.data]
         embeddings_array = np.array(embeddings).astype('float32')
         
         # Create FAISS index
@@ -50,15 +54,13 @@ async def search_similar(query: str, execution_id: str, k: int = 5) -> List[Dict
     Search for similar chunks using query embedding
     """
     try:
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        
-        # Get query embedding
-        response = await openai.Embedding.acreate(
+        # Get query embedding (new API)
+        response = client.embeddings.create(
             input=[query],
             model="text-embedding-3-large"
         )
         
-        query_embedding = np.array([response["data"][0]["embedding"]]).astype('float32')
+        query_embedding = np.array([response.data[0].embedding]).astype('float32')
         
         # Search in FAISS index
         index = embedding_storage.get(execution_id)

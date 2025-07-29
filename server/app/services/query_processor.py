@@ -1,10 +1,13 @@
-import openai
+from openai import OpenAI
 import os
 from typing import List
 import logging
 from app.services.embedding_service import search_similar
 
 logger = logging.getLogger(__name__)
+
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 async def process_queries(questions: List[str], execution_id: str) -> List[str]:
     """
@@ -50,8 +53,6 @@ async def generate_answer_with_llm(question: str, context: str) -> str:
     Generate answer using OpenAI GPT with context
     """
     try:
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        
         system_prompt = """You are an expert insurance policy analyst. Based on the provided policy document context, answer the user's question accurately and concisely. 
 
 Guidelines:
@@ -68,7 +69,8 @@ Question: {question}
 
 Please provide a clear, accurate answer based on the policy information above."""
 
-        response = await openai.ChatCompletion.acreate(
+        # Use new OpenAI API format
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
