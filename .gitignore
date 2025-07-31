@@ -31,7 +31,7 @@ FrontendOld/
 
 
 # Python cache files
-__pycache__/
+# __pycache__/
 *.py[cod]
 *.so
 
@@ -84,3 +84,5 @@ coverage.xml
 
 try.json
 AdminPanel/
+
+vector_cache/
