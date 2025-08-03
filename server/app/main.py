@@ -11,7 +11,13 @@ load_dotenv()
 
 class FixQuotesMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path == "/api/v1/hackrx/run" and request.method == "POST":
+        hackrx_post_endpoints = [
+            "/api/v1/hackrx/run",
+            "/api/v1/hackrx/get-cached-qa",
+            "/api/v1/hackrx/edit-cached-answer",
+            "/api/v1/hackrx/delete-cached-qa"
+        ]
+        if request.url.path in hackrx_post_endpoints and request.method == "POST":
             # Read raw body
             body = await request.body()
             body_str = body.decode('utf-8')

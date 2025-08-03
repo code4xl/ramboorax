@@ -1,5 +1,6 @@
 import os
 import pickle
+import hashlib
 
 # Directory to store vector stores
 CACHE_DIR = "vector_cache"
@@ -45,3 +46,65 @@ def save_vector_store(db, url: str):
     # Save the actual DB
     with open(path, "wb") as f:
         pickle.dump(db, f)
+
+def generate_qa_cache_key(document_url: str, questions: list) -> str:
+    """Generate cache key for Q&A based on document URL and sorted questions"""
+    sorted_questions = sorted(questions)
+    questions_str = "|".join(sorted_questions)
+    questions_hash = hashlib.md5(questions_str.encode()).hexdigest()[:16]
+    return f"{document_url}_{questions_hash}"
+
+def load_qa_cache_if_exists(cache_key: str):
+    """Load cached Q&A if exists"""
+    qa_cache_file = os.path.join(CACHE_DIR, "qa_cache.pkl")
+    
+    if os.path.exists(qa_cache_file):
+        with open(qa_cache_file, "rb") as f:
+            qa_cache = pickle.load(f)
+        return qa_cache.get(cache_key)
+    return None
+
+def save_qa_cache(cache_key: str, questions: list, answers: list):
+    """Save Q&A cache"""
+    qa_cache_file = os.path.join(CACHE_DIR, "qa_cache.pkl")
+    
+    # Load existing cache
+    qa_cache = {}
+    if os.path.exists(qa_cache_file):
+        with open(qa_cache_file, "rb") as f:
+            qa_cache = pickle.load(f)
+    
+    # Add new entry
+    qa_cache[cache_key] = {
+        "questions": questions,
+        "answers": answers
+    }
+    
+    # Save updated cache
+    with open(qa_cache_file, "wb") as f:
+        pickle.dump(qa_cache, f)
+
+
+def delete_qa_cache(cache_key: str) -> bool:
+    """Delete specific Q&A cache entry"""
+    qa_cache_file = os.path.join(CACHE_DIR, "qa_cache.pkl")
+    
+    if not os.path.exists(qa_cache_file):
+        return False
+    
+    # Load existing cache
+    with open(qa_cache_file, "rb") as f:
+        qa_cache = pickle.load(f)
+    
+    # Check if key exists
+    if cache_key not in qa_cache:
+        return False
+    
+    # Delete the entry
+    qa_cache.pop(cache_key)
+    
+    # Save updated cache
+    with open(qa_cache_file, "wb") as f:
+        pickle.dump(qa_cache, f)
+    
+    return True

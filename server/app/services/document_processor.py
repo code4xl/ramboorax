@@ -3,6 +3,7 @@ from app.helpers.embedder import embed_chunks_parallel, embed_chunks
 from app.helpers.retriever import get_similar_contexts
 from app.helpers.llm_reasoner import generate_batch_answer
 from app.helpers.cache_manager import load_vector_store_if_exists, save_vector_store
+from app.helpers.cache_manager import generate_qa_cache_key, load_qa_cache_if_exists, save_qa_cache
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,20 +32,39 @@ class DocumentProcessorService:
             db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4)
             save_vector_store(db, document_url)
 
-        # **OPTIMIZED PARALLEL BATCH PROCESSING**
-        batch_size = 5
-        max_workers = min(4, (len(questions) + batch_size - 1) // batch_size)  # Dynamic worker count
+        # Check Q&A cache
+        qa_cache_key = generate_qa_cache_key(document_url, questions)
+        cached_qa = load_qa_cache_if_exists(qa_cache_key)
         
-        print(f"🔄 Processing {len(questions)} questions in parallel with {max_workers} workers")
-        
-        # Create batches
-        question_batches = [
-            questions[i:i + batch_size] 
-            for i in range(0, len(questions), batch_size)
-        ]
-        
-        # Process batches in parallel
-        answers = await self._process_batches_parallel(db, question_batches, max_workers)
+        if cached_qa:
+            print("✅ Using cached Q&A answers.")
+            # Map questions to answers maintaining input order
+            cached_questions = cached_qa["questions"]
+            cached_answers = cached_qa["answers"]
+            
+            # Create question-to-answer mapping
+            qa_mapping = dict(zip(cached_questions, cached_answers))
+            
+            # Return answers in the same order as input questions
+            answers = [qa_mapping.get(q, "❌ Answer not found") for q in questions]
+
+        else:
+            # **OPTIMIZED PARALLEL BATCH PROCESSING**
+            batch_size = 5
+            max_workers = min(4, (len(questions) + batch_size - 1) // batch_size)  # Dynamic worker count
+            
+            print(f"🔄 Processing {len(questions)} questions in parallel with {max_workers} workers")
+            
+            # Create batches
+            question_batches = [
+                questions[i:i + batch_size] 
+                for i in range(0, len(questions), batch_size)
+            ]
+            
+            # Process batches in parallel
+            answers = await self._process_batches_parallel(db, question_batches, max_workers)
+            # Save to Q&A cache
+            save_qa_cache(qa_cache_key, questions, answers)
         
         stop=time.time()
         print(f"🕒 Total Time: {stop - start:.2f} seconds")
