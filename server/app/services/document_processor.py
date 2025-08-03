@@ -1,221 +1,143 @@
-# import httpx
-# import fitz
-# import io
-# import logging
-# from typing import List, Dict
-# import re
+from app.helpers.processor import extract_text_from_url, chunk_text_parallel, chunk_text
+from app.helpers.embedder import embed_chunks_parallel, embed_chunks
+from app.helpers.retriever import get_similar_contexts
+from app.helpers.llm_reasoner import generate_batch_answer
+from app.helpers.cache_manager import load_vector_store_if_exists, save_vector_store
+import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
-# logger = logging.getLogger(__name__)
+class DocumentProcessorService:
+    async def process_document_and_questions(self, document_url: str, questions: list) -> list:
+        start=time.time()
+        print(f"🚀 DEBUG: Validated request received")
+        print(f"📄 Document URL: {document_url}")
+        print(f"❓ Questions: {questions}")
+        print(f"❓ Questions count: {len(questions) if hasattr(questions, '__len__') else 'N/A'}")
+        print(f"❓ First few questions: {questions[:2] if len(questions) > 0 else 'None'}")
 
-# async def process_document_from_url(document_url: str) -> List[Dict]:
-#     """
-#     Download and process document from URL
-#     """
-#     try:
-#         # Download document
-#         async with httpx.AsyncClient() as client:
-#             response = await client.get(str(document_url))
-#             response.raise_for_status()
-            
-#         # Process based on content type
-#         content_type = response.headers.get('content-type', '')
-        
-#         if 'pdf' in content_type.lower():
-#             return await process_pdf(response.content)
-#         elif 'word' in content_type.lower() or 'docx' in content_type.lower():
-#             return await process_docx(response.content)
-#         else:
-#             # Try to process as PDF by default
-#             return await process_pdf(response.content)
-            
-#     except Exception as e:
-#         logger.error(f"Error processing document from URL: {str(e)}")
-#         raise
+        # Use the URL directly to load/save cache
+        db = load_vector_store_if_exists(document_url)
 
-# async def process_pdf(pdf_content: bytes) -> List[Dict]:
-#     """
-#     Extract text from PDF using pdfplumber
-#     """
-#     try:
-#         pdf_file = io.BytesIO(pdf_content)
-        
-#         full_text = ""
-#         with pdfplumber.open(pdf_file) as pdf:
-#             for page in pdf.pages:
-#                 text = page.extract_text()
-#                 if text:
-#                     full_text += text + "\n"
-        
-#         # Clean and chunk the text
-#         chunks = intelligent_chunking(full_text)
-        
-#         return [{"text": chunk, "metadata": {"source": "pdf", "chunk_id": i}} 
-#                 for i, chunk in enumerate(chunks)]
-        
-#     except Exception as e:
-#         logger.error(f"Error processing PDF: {str(e)}")
-#         raise
-    
-# def intelligent_chunking(text: str, max_chunk_size: int = 1000) -> List[str]:
-#     """
-#     Intelligent text chunking that preserves semantic meaning
-#     """
-#     # Clean text
-#     text = re.sub(r'\s+', ' ', text).strip()
-    
-#     # Split by sentences first
-#     sentences = re.split(r'(?<=[.!?])\s+', text)
-    
-#     chunks = []
-#     current_chunk = ""
-    
-#     for sentence in sentences:
-#         if len(current_chunk) + len(sentence) <= max_chunk_size:
-#             current_chunk += sentence + " "
-#         else:
-#             if current_chunk:
-#                 chunks.append(current_chunk.strip())
-#             current_chunk = sentence + " "
-    
-#     if current_chunk:
-#         chunks.append(current_chunk.strip())
-    
-#     return chunks
-
-# async def process_docx(docx_content: bytes) -> List[Dict]:
-#     """
-#     Process DOCX files (implement based on your needs)
-#     """
-#     # Implement DOCX processing using python-docx
-#     pass
-
-import httpx
-import fitz
-import io
-import logging
-from typing import List, Dict
-import re
-
-logger = logging.getLogger(__name__)
-
-async def process_document_from_url(document_url: str) -> List[Dict]:
-    """
-    Download and process document from URL
-    """
-    try:
-        # Download document
-        async with httpx.AsyncClient() as client:
-            response = await client.get(str(document_url))
-            response.raise_for_status()
-            
-        # Process based on content type
-        content_type = response.headers.get('content-type', '')
-        
-        if 'pdf' in content_type.lower():
-            return await process_pdf(response.content)
-        elif 'word' in content_type.lower() or 'docx' in content_type.lower():
-            return await process_docx(response.content)
+        if db is not None:
+            print("✅ Using cached vector store.")
         else:
-            # Try to process as PDF by default
-            return await process_pdf(response.content)
+            print("📥 Downloading and embedding new document.")
+            raw_text = extract_text_from_url(document_url)
+            # chunks = chunk_text(raw_text)
+            chunks = chunk_text_parallel(raw_text, num_threads=4)
+            # db = embed_chunks(chunks)
+            db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4)
+            save_vector_store(db, document_url)
+
+        # **OPTIMIZED PARALLEL BATCH PROCESSING**
+        batch_size = 5
+        max_workers = min(4, (len(questions) + batch_size - 1) // batch_size)  # Dynamic worker count
+        
+        print(f"🔄 Processing {len(questions)} questions in parallel with {max_workers} workers")
+        
+        # Create batches
+        question_batches = [
+            questions[i:i + batch_size] 
+            for i in range(0, len(questions), batch_size)
+        ]
+        
+        # Process batches in parallel
+        answers = await self._process_batches_parallel(db, question_batches, max_workers)
+        
+        stop=time.time()
+        print(f"🕒 Total Time: {stop - start:.2f} seconds")
+        return answers
+    
+
+
+
+    async def _process_batches_parallel(self, db, question_batches, max_workers):
+        """Process question batches in parallel for maximum efficiency"""
+        
+        def process_single_batch(batch_info):
+            """Process a single batch of questions"""
+            batch_idx, question_batch = batch_info
+            batch_start = time.time()
             
-    except Exception as e:
-        logger.error(f"Error processing document from URL: {str(e)}")
-        raise
+            try:
+                # Step 1: Parallel context retrieval for all questions in batch
+                with ThreadPoolExecutor(max_workers=len(question_batch)) as context_executor:
+                    context_futures = {
+                        context_executor.submit(get_similar_contexts, db, q): q 
+                        for q in question_batch
+                    }
+                    
+                    contexts = []
+                    for future in as_completed(context_futures):
+                        try:
+                            context = future.result()
+                            contexts.append(context)
+                        except Exception as e:
+                            print(f"❌ Context retrieval error: {e}")
+                            contexts.append([])  # Empty context as fallback
+                
+                # Step 2: Generate answers for the batch
+                batch_answers = generate_batch_answer(contexts, question_batch)
+                
+                batch_time = time.time() - batch_start
+                # print(f"✅ Batch {batch_idx + 1} completed in {batch_time:.2f}s ({len(question_batch)} questions)")
+                
+                return batch_idx, batch_answers
+                
+            except Exception as e:
+                print(f"❌ Batch {batch_idx + 1} error: {e}")
+                return batch_idx, ["Error processing question" for _ in question_batch]
 
-async def process_pdf(pdf_content: bytes) -> List[Dict]:
-    """
-    Extract text from PDF using PyMuPDF and chunk it intelligently
-    """
-    try:
-        # Open PDF from bytes
-        pdf_document = fitz.open(stream=pdf_content, filetype="pdf")
+        # Process all batches in parallel
+        loop = asyncio.get_event_loop()
         
-        full_text = ""
-        for page_num in range(pdf_document.page_count):
-            page = pdf_document[page_num]
-            text = page.get_text()
-            if text.strip():  # Only add non-empty text
-                full_text += text + "\n"
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all batch processing tasks
+            batch_futures = {
+                loop.run_in_executor(executor, process_single_batch, (idx, batch)): idx
+                for idx, batch in enumerate(question_batches)
+            }
+            
+            # Collect results maintaining order
+            batch_results = {}
+            for future in asyncio.as_completed(batch_futures):
+                try:
+                    batch_idx, batch_answers = await future
+                    batch_results[batch_idx] = batch_answers
+                except Exception as e:
+                    batch_idx = batch_futures[future]
+                    print(f"❌ Batch {batch_idx + 1} failed: {e}")
+                    batch_results[batch_idx] = ["Error" for _ in question_batches[batch_idx]]
         
-        pdf_document.close()
+        # Combine results in correct order
+        all_answers = []
+        for i in range(len(question_batches)):
+            all_answers.extend(batch_results.get(i, []))
         
-        if not full_text.strip():
-            raise ValueError("No text could be extracted from the PDF")
-        
-        # Clean and chunk the text
-        chunks = intelligent_chunking(full_text)
-        
-        return [{"text": chunk, "metadata": {"source": "pdf", "chunk_id": i}} 
-                for i, chunk in enumerate(chunks)]
-        
-    except Exception as e:
-        logger.error(f"Error processing PDF: {str(e)}")
-        raise
+        return all_answers
 
-def intelligent_chunking(text: str, max_chunk_size: int = 1000) -> List[str]:
-    """
-    Intelligent text chunking that preserves semantic meaning
-    """
-    # Clean text
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    if not text:
-        return []
-    
-    # Split by sentences first
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    
-    chunks = []
-    current_chunk = ""
-    
-    for sentence in sentences:
-        # If adding this sentence would exceed max size and we have content
-        if len(current_chunk) + len(sentence) > max_chunk_size and current_chunk:
-            chunks.append(current_chunk.strip())
-            current_chunk = sentence + " "
-        else:
-            current_chunk += sentence + " "
-    
-    # Add the last chunk if it has content
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-    
-    # If no chunks were created (text too short), return the original text
-    if not chunks and text:
-        chunks.append(text)
-    
-    return chunks
-
-async def process_docx(docx_content: bytes) -> List[Dict]:
-    """
-    Process DOCX files using python-docx
-    """
-    try:
-        from docx import Document
-        import io
+    async def _process_batch_optimized(self, db, question_batch):
+        """Optimized processing for a single batch with parallel context retrieval"""
         
-        # Create a file-like object from bytes
-        docx_file = io.BytesIO(docx_content)
-        doc = Document(docx_file)
+        # Parallel context retrieval
+        async def get_context_async(question):
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, get_similar_contexts, db, question)
         
-        full_text = ""
-        for paragraph in doc.paragraphs:
-            if paragraph.text.strip():
-                full_text += paragraph.text + "\n"
+        # Get contexts for all questions in parallel
+        context_tasks = [get_context_async(q) for q in question_batch]
+        contexts = await asyncio.gather(*context_tasks, return_exceptions=True)
         
-        if not full_text.strip():
-            raise ValueError("No text could be extracted from the DOCX")
+        # Handle any exceptions in context retrieval
+        clean_contexts = []
+        for i, context in enumerate(contexts):
+            if isinstance(context, Exception):
+                print(f"❌ Context error for question {i}: {context}")
+                clean_contexts.append([])  # Empty fallback
+            else:
+                clean_contexts.append(context)
         
-        # Clean and chunk the text
-        chunks = intelligent_chunking(full_text)
-        
-        return [{"text": chunk, "metadata": {"source": "docx", "chunk_id": i}} 
-                for i, chunk in enumerate(chunks)]
-        
-    except ImportError:
-        logger.error("python-docx not installed. Cannot process DOCX files.")
-        raise ValueError("DOCX processing not available. Please install python-docx.")
-    except Exception as e:
-        logger.error(f"Error processing DOCX: {str(e)}")
-        raise
+        # Generate answers for the batch
+        return generate_batch_answer(clean_contexts, question_batch)
