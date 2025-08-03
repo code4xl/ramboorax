@@ -4,6 +4,9 @@ from app.helpers.retriever import get_similar_contexts
 from app.helpers.llm_reasoner import generate_batch_answer
 from app.helpers.cache_manager import load_vector_store_if_exists, save_vector_store
 import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 class DocumentProcessorService:
     async def process_document_and_questions(self, document_url: str, questions: list) -> list:
@@ -28,16 +31,113 @@ class DocumentProcessorService:
             db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4)
             save_vector_store(db, document_url)
 
-        # Batch Question Processing
+        # **OPTIMIZED PARALLEL BATCH PROCESSING**
         batch_size = 5
-        answers = []
-
-        for i in range(0, len(questions), batch_size):
-            question_batch = questions[i:i + batch_size]
-            contexts = [get_similar_contexts(db, q) for q in question_batch]
-            batch_answers = generate_batch_answer(contexts, question_batch)
-            answers.extend(batch_answers)
+        max_workers = min(4, (len(questions) + batch_size - 1) // batch_size)  # Dynamic worker count
+        
+        print(f"🔄 Processing {len(questions)} questions in parallel with {max_workers} workers")
+        
+        # Create batches
+        question_batches = [
+            questions[i:i + batch_size] 
+            for i in range(0, len(questions), batch_size)
+        ]
+        
+        # Process batches in parallel
+        answers = await self._process_batches_parallel(db, question_batches, max_workers)
         
         stop=time.time()
         print(f"🕒 Total Time: {stop - start:.2f} seconds")
         return answers
+    
+
+
+
+    async def _process_batches_parallel(self, db, question_batches, max_workers):
+        """Process question batches in parallel for maximum efficiency"""
+        
+        def process_single_batch(batch_info):
+            """Process a single batch of questions"""
+            batch_idx, question_batch = batch_info
+            batch_start = time.time()
+            
+            try:
+                # Step 1: Parallel context retrieval for all questions in batch
+                with ThreadPoolExecutor(max_workers=len(question_batch)) as context_executor:
+                    context_futures = {
+                        context_executor.submit(get_similar_contexts, db, q): q 
+                        for q in question_batch
+                    }
+                    
+                    contexts = []
+                    for future in as_completed(context_futures):
+                        try:
+                            context = future.result()
+                            contexts.append(context)
+                        except Exception as e:
+                            print(f"❌ Context retrieval error: {e}")
+                            contexts.append([])  # Empty context as fallback
+                
+                # Step 2: Generate answers for the batch
+                batch_answers = generate_batch_answer(contexts, question_batch)
+                
+                batch_time = time.time() - batch_start
+                # print(f"✅ Batch {batch_idx + 1} completed in {batch_time:.2f}s ({len(question_batch)} questions)")
+                
+                return batch_idx, batch_answers
+                
+            except Exception as e:
+                print(f"❌ Batch {batch_idx + 1} error: {e}")
+                return batch_idx, ["Error processing question" for _ in question_batch]
+
+        # Process all batches in parallel
+        loop = asyncio.get_event_loop()
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all batch processing tasks
+            batch_futures = {
+                loop.run_in_executor(executor, process_single_batch, (idx, batch)): idx
+                for idx, batch in enumerate(question_batches)
+            }
+            
+            # Collect results maintaining order
+            batch_results = {}
+            for future in asyncio.as_completed(batch_futures):
+                try:
+                    batch_idx, batch_answers = await future
+                    batch_results[batch_idx] = batch_answers
+                except Exception as e:
+                    batch_idx = batch_futures[future]
+                    print(f"❌ Batch {batch_idx + 1} failed: {e}")
+                    batch_results[batch_idx] = ["Error" for _ in question_batches[batch_idx]]
+        
+        # Combine results in correct order
+        all_answers = []
+        for i in range(len(question_batches)):
+            all_answers.extend(batch_results.get(i, []))
+        
+        return all_answers
+
+    async def _process_batch_optimized(self, db, question_batch):
+        """Optimized processing for a single batch with parallel context retrieval"""
+        
+        # Parallel context retrieval
+        async def get_context_async(question):
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, get_similar_contexts, db, question)
+        
+        # Get contexts for all questions in parallel
+        context_tasks = [get_context_async(q) for q in question_batch]
+        contexts = await asyncio.gather(*context_tasks, return_exceptions=True)
+        
+        # Handle any exceptions in context retrieval
+        clean_contexts = []
+        for i, context in enumerate(contexts):
+            if isinstance(context, Exception):
+                print(f"❌ Context error for question {i}: {context}")
+                clean_contexts.append([])  # Empty fallback
+            else:
+                clean_contexts.append(context)
+        
+        # Generate answers for the batch
+        return generate_batch_answer(clean_contexts, question_batch)

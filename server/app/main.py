@@ -12,14 +12,14 @@ load_dotenv()
 class FixQuotesMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path == "/api/v1/hackrx/run" and request.method == "POST":
-            # Read the raw body
+            # Read raw body
             body = await request.body()
             body_str = body.decode('utf-8')
             
             print(f"🔍 DEBUG: Original body: {body_str[:200]}...")
             
             try:
-                # Try to parse as normal JSON first
+                # Try to parse as JSON
                 json.loads(body_str)
                 print("✅ DEBUG: Valid JSON, no fixing needed")
             except json.JSONDecodeError:
@@ -29,89 +29,82 @@ class FixQuotesMiddleware(BaseHTTPMiddleware):
                 fixed_body = self.fix_json_quotes(body_str)
                 print(f"🔧 DEBUG: Fixed body: {fixed_body[:200]}...")
                 
-                # Replace the request body
+                # Replace the request body with fixed JSON
                 request._body = fixed_body.encode('utf-8')
         
         response = await call_next(request)
         return response
-    
+
     def fix_json_quotes(self, body_str: str) -> str:
-        """Fix mixed quotes in JSON string"""
+        """Fix mixed or mismatched quotes in the questions array while preserving internal quotes."""
         try:
-            # Find the questions array using regex
             pattern = r'"questions":\s*(\[.*?\])'
             match = re.search(pattern, body_str, re.DOTALL)
-            
-            if match:
-                questions_array = match.group(1)
-                print(f"🎯 DEBUG: Found questions array")
-                
-                # Parse each question individually based on its wrapper quotes
-                questions = []
-                
-                # Find all question strings - look for patterns that start with either " or '
-                i = 0
-                while i < len(questions_array):
-                    # Skip whitespace, commas, brackets
-                    if questions_array[i] in ' \n\t,[]':
+            if not match:
+                return body_str
+
+            questions_raw = match.group(1)
+            print("🎯 DEBUG: Found questions array")
+
+            questions = []
+            i, n = 0, len(questions_raw)
+
+            while i < n:
+                if questions_raw[i] in ['"', "'"]:
+                    start_quote = questions_raw[i]
+                    i += 1
+                    start_idx = i
+                    question_chars = []
+                    escaped = False
+
+                    while i < n:
+                        c = questions_raw[i]
+
+                        if escaped:
+                            question_chars.append(c)
+                            escaped = False
+                        elif c == '\\':
+                            question_chars.append(c)
+                            escaped = True
+                        elif c == start_quote:
+                            # Correct closing quote
+                            break
+                        elif c in ['"', "'"] and questions_raw[i+1:i+2] in [',', ']']:
+                            # Potential mismatched closing at end
+                            # Replace with start_quote later
+                            break
+                        else:
+                            question_chars.append(c)
                         i += 1
-                        continue
-                    
-                    # Found start of a question
-                    if questions_array[i] == '"':
-                        # Double-quoted string - find the closing quote
-                        i += 1  # skip opening quote
-                        start = i
-                        while i < len(questions_array) and questions_array[i] != '"':
-                            if questions_array[i] == '\\':  # handle escaped characters
-                                i += 2
-                            else:
-                                i += 1
-                        
-                        if i < len(questions_array):  # found closing quote
-                            question = questions_array[start:i]
-                            # Remove all single quotes from double-quoted string
-                            clean_question = question.replace("'", "")
-                            questions.append(clean_question)
-                            i += 1  # skip closing quote
-                        
-                    elif questions_array[i] == "'":
-                        # Single-quoted string - find the closing quote
-                        i += 1  # skip opening quote
-                        start = i
-                        while i < len(questions_array) and questions_array[i] != "'":
-                            if questions_array[i] == '\\':  # handle escaped characters
-                                i += 2
-                            else:
-                                i += 1
-                        
-                        if i < len(questions_array):  # found closing quote
-                            question = questions_array[start:i]
-                            # Remove all double quotes from single-quoted string
-                            clean_question = question.replace('"', "")
-                            questions.append(clean_question)
-                            i += 1  # skip closing quote
-                    else:
-                        i += 1
-                
-                print(f"📝 DEBUG: Extracted {len(questions)} questions")
-                print(f"📝 DEBUG: First question: {questions[0] if questions else 'None'}")
-                
-                # Rebuild as proper JSON array with double quotes
-                fixed_questions = []
-                for q in questions:
-                    # Escape any remaining double quotes and backslashes for JSON
-                    escaped_q = q.replace('\\', '\\\\').replace('"', '\\"')
-                    fixed_questions.append(f'"{escaped_q}"')
-                
-                fixed_array = '[' + ', '.join(fixed_questions) + ']'
-                
-                # Replace in the original body
-                fixed_body = body_str.replace(match.group(1), fixed_array)
-                return fixed_body
-            
-            return body_str
-            
+
+                    # Construct question string
+                    question = ''.join(question_chars)
+                    end_quote = questions_raw[i] if i < n else start_quote
+
+                    # Fix mismatched closing quotes
+                    if end_quote != start_quote:
+                        end_quote = start_quote
+
+                    questions.append(f'{start_quote}{question}{end_quote}')
+                    i += 1
+                else:
+                    i += 1
+
+            print(f"📝 DEBUG: Extracted {len(questions)} questions")
+            if questions:
+                print(f"📝 DEBUG: First fixed question: {questions[0]}")
+
+            # Rebuild valid JSON array with double quotes
+            fixed_questions = []
+            for q in questions:
+                # Strip the wrapping quotes first, escape, then wrap again in double quotes
+                inner = q[1:-1].replace('\\', '\\\\').replace('"', '\\"')
+                fixed_questions.append(f'"{inner}"')
+
+            fixed_array = '[' + ', '.join(fixed_questions) + ']'
+            fixed_body = body_str.replace(questions_raw, fixed_array)
+            return fixed_body
+
         except Exception as e:
             print(f"❌ DEBUG: Error fixing quotes: {e}")
             return body_str
