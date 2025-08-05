@@ -12,6 +12,7 @@ import threading
 class DocumentProcessorService:
     async def process_document_and_questions(self, document_url: str, questions: list) -> list:
         start=time.time()
+        isCachingEnabled = False
         print(f"🚀 DEBUG: Validated request received")
         print(f"📄 Document URL: {document_url}")
         print(f"❓ Questions: {questions}")
@@ -32,51 +33,42 @@ class DocumentProcessorService:
             db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4)
             save_vector_store(db, document_url)
 
-        # Check Q&A cache
-        qa_cache_key = generate_qa_cache_key(document_url, questions)
-        cached_qa = load_qa_cache_if_exists(qa_cache_key)
+        if isCachingEnabled:
+            # Check Q&A cache
+            qa_cache_key = generate_qa_cache_key(document_url, questions)
+            cached_qa = load_qa_cache_if_exists(qa_cache_key)
         
-        if cached_qa:
-            print("✅ Using cached Q&A answers.")
-            # Calculate and apply realistic delay
-            delay_seconds = calculate_realistic_delay(len(questions))
-            print(f"⏳ Simulating processing time: {delay_seconds:.2f} seconds for {len(questions)} questions")
-            
-            # await asyncio.sleep(delay_seconds)
-            # Map questions to answers maintaining input order
-            cached_questions = cached_qa["questions"]
-            cached_answers = cached_qa["answers"]
-            
-            # Create question-to-answer mapping
-            qa_mapping = dict(zip(cached_questions, cached_answers))
-            
-            # Return answers in the same order as input questions
-            answers = [qa_mapping.get(q, "❌ Answer not found") for q in questions]
+            if cached_qa:
+                print("✅ Using cached Q&A answers.")
+                # Calculate and apply realistic delay
+                delay_seconds = calculate_realistic_delay(len(questions))
+                print(f"⏳ Simulating processing time: {delay_seconds:.2f} seconds for {len(questions)} questions")
+                
+                # await asyncio.sleep(delay_seconds)
+                # Map questions to answers maintaining input order
+                cached_questions = cached_qa["questions"]
+                cached_answers = cached_qa["answers"]
+                
+                # Create question-to-answer mapping
+                qa_mapping = dict(zip(cached_questions, cached_answers))
+                
+                # Return answers in the same order as input questions
+                answers = [qa_mapping.get(q, "❌ Answer not found") for q in questions]
 
+            else:                 
+                # Process batches in parallel
+                answers = await self._process_questions_normally(db, questions)
+                # Save to Q&A cache
+                save_qa_cache(qa_cache_key, questions, answers)
         else:
-            # **OPTIMIZED PARALLEL BATCH PROCESSING**
-            batch_size = 5
-            max_workers = min(4, (len(questions) + batch_size - 1) // batch_size)  # Dynamic worker count
-            
-            print(f"🔄 Processing {len(questions)} questions in parallel with {max_workers} workers")
-            
-            # Create batches
-            question_batches = [
-                questions[i:i + batch_size] 
-                for i in range(0, len(questions), batch_size)
-            ]
-            
+            print("❌ Caching is disabled, processing questions normally.")
             # Process batches in parallel
-            answers = await self._process_batches_parallel(db, question_batches, max_workers)
-            # Save to Q&A cache
-            save_qa_cache(qa_cache_key, questions, answers)
+            answers = await self._process_questions_normally(db, questions)
         
         stop=time.time()
         print(f"🕒 Total Time: {stop - start:.2f} seconds")
         return answers
     
-
-
 
     async def _process_batches_parallel(self, db, question_batches, max_workers):
         """Process question batches in parallel for maximum efficiency"""
@@ -166,3 +158,19 @@ class DocumentProcessorService:
         
         # Generate answers for the batch
         return generate_batch_answer(clean_contexts, question_batch)
+
+    async def _process_questions_normally(self, db, questions):
+        # OPTIMIZED PARALLEL BATCH PROCESSING
+        batch_size = 5
+        max_workers = min(4, (len(questions) + batch_size - 1) // batch_size)  # Dynamic worker count
+            
+        print(f"🔄 Processing {len(questions)} questions in parallel with {max_workers} workers")
+            
+        # Create batches
+        question_batches = [
+            questions[i:i + batch_size] 
+            for i in range(0, len(questions), batch_size)
+        ]
+            
+        # Process batches in parallel
+        return await self._process_batches_parallel(db, question_batches, max_workers)

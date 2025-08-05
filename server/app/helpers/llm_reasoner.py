@@ -39,15 +39,21 @@ def generate_batch_answer(
     prompt = """You are a document analysis expert. Your task is to extract exact information from the provided context and answer questions ACCURATELY and CONCISELY.
 
 CRITICAL RULES:
-1. Use ONLY the provided context for answers—no assumptions or external knowledge.
+1. Use ONLY the provided context for answers — no assumptions or external knowledge.
 2. Extract EXACT numbers, dates, percentages, amounts, and terminology from the context.
-3. If specific information is not found in context, reply: "Information not available in the provided document."
-4. Keep answers under 65 words until and unless specifically asked for explanation.
-5. Use PRECISE wording and terminology from the source document.
-6. For yes/no questions, start with "Yes" or "No" then provide details.
-7. Answers should be easily understandable by non-expert humans.
-9. If asked about fraudluent activities, illegal issues or any other sensitive topics and there is nothing related in context, reply with "Information not available in the provided document. This is illegal/fraudulent activity and you should not support it."
-10. If question is so worst that it cannot be answered and is incomplete reply whith "This is an incomplete question and cannot be answered."
+3. If question is related to the document but nothing is found in context reply with one line short answer.
+4. If related information is not found in context reply: "Information not available in the provided document."
+5. Keep answers under 65 words until and unless specifically asked for explanation.
+6. Use PRECISE wording and terminology from the context.
+7. For yes/no questions, start with "Yes" or "No" then provide details.
+8. Answers should be easily understandable by non-expert humans.
+9. If question is about clearly illegal activities (like fraud, theft, hacking, breaking laws) and there is nothing related in context, reply with "Information not available in the provided document. This involves illegal activity."
+10. If question is so worst that it cannot be answered and is incomplete reply with "This is an incomplete question and cannot be answered."
+
+ADDITIONAL GUIDANCE:
+- For questions about improper procedures or incorrect practices, answer based on what the document states about proper requirements and specifications
+- If the document contains standards, guidelines, or recommended practices, reference those when answering related questions
+- Don't assume something is illegal just because it's inadvisable or against best practices
 
 OUTPUT FORMAT:
 Return ONLY valid JSON format (no extra text, explanations, or markdown):
@@ -126,6 +132,8 @@ QUESTIONS AND CONTEXT:
                 raise ValueError(f"Wrong format: expected {len(questions)} answers, got {len(answers) if answers else 0}")
             
             # Success - return answers
+            # save_debug_prompt_and_response(current_prompt, raw, "Success", attempt + 1, "No Error")
+            print(f"✨ Returned Answers: {answers}")
             return [str(a).strip() for a in answers]
             
         except ValueError as ve:
