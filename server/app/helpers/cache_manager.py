@@ -1,6 +1,8 @@
 import os
 import pickle
 import hashlib
+import random
+import asyncio
 
 # Directory to store vector stores
 CACHE_DIR = "vector_cache"
@@ -108,3 +110,19 @@ def delete_qa_cache(cache_key: str) -> bool:
         pickle.dump(qa_cache, f)
     
     return True
+
+def calculate_realistic_delay(question_count: int) -> float:
+    """Calculate realistic delay based on question count to simulate processing"""
+    if question_count <= 5:
+        return random.uniform(1.0, 3.0)
+    elif question_count <= 10:
+        return random.uniform(3.0, 8.0)
+    elif question_count <= 15:
+        return random.uniform(9.0, 17.0)
+    elif question_count <= 25:
+        return random.uniform(17.0, 20.0)
+    else:
+        # For larger sets, scale proportionally
+        base_time = 5.0
+        extra_time = (question_count - 25) * 1.2
+        return random.uniform(base_time, base_time + extra_time)
