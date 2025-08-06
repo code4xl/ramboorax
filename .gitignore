@@ -90,3 +90,4 @@ vector_cache_large/
 prompts/
 vector_cache_minilm/
 demo/
+vector_cache_context/
