@@ -126,6 +126,7 @@ def extract_text_from_url(file_url: str) -> dict:
 
                 elif ext == "xlsx":
                     excel_result = extract_text_from_xlsx(f.name)
+                    print(f"{excel_result} From extract_text_fromURL")
                     if excel_result.get("isError"):
                         return excel_result
                     
@@ -348,6 +349,110 @@ def extract_text_from_xlsx(file_path: str) -> dict:
             "message": f"Failed to read Excel file: {str(e)}"
         }
 
+def extract_text_from_image(file_path: str) -> str:
+    """Extract text from image using OCR"""
+    try:
+        image = Image.open(file_path)
+        text = pytesseract.image_to_string(image)
+        return text.strip() if text.strip() else "No text found in the image"
+    except Exception as e:
+        raise Exception(f"Failed to process image file: {str(e)}")
+
+def extract_text_from_pptx(file_path: str) -> str:
+    """Extract text from PowerPoint file including text from images using OCR"""
+    try:
+        presentation = Presentation(file_path)
+        text_content = []
+        
+        for i, slide in enumerate(presentation.slides, 1):
+            text_content.append(f"Slide {i}:")
+            slide_text = []
+            slide_image_text = []
+            
+            for shape in slide.shapes:
+                # Extract regular text
+                if hasattr(shape, "text") and shape.text.strip():
+                    slide_text.append(shape.text.strip())
+                
+                # Extract text from images using OCR
+                elif shape.shape_type == 13:  # Picture shape type
+                    temp_img_path = None
+                    try:
+                        # Get image data from shape
+                        image_data = shape.image.blob
+                        
+                        # Create temporary image file
+                        with NamedTemporaryFile(delete=False, suffix=".png") as temp_img:
+                            temp_img.write(image_data)
+                            temp_img.flush()
+                            temp_img_path = temp_img.name
+                        
+                        # Extract text using OCR (file is now closed)
+                        image = Image.open(temp_img_path)
+                        ocr_text = pytesseract.image_to_string(image, config='--psm 6')
+                        image.close()  # Close the image explicitly
+                        
+                        if ocr_text.strip():
+                            slide_image_text.append(f"[Image Text]: {ocr_text.strip()}")
+                        
+                    except Exception as ocr_error:
+                        print(f"⚠️ OCR failed for image in slide {i}: {ocr_error}")
+                    
+                    finally:
+                        # Clean up temp file safely
+                        if temp_img_path and os.path.exists(temp_img_path):
+                            try:
+                                os.unlink(temp_img_path)
+                            except PermissionError:
+                                # If file is still locked, try to delete later
+                                import atexit
+                                atexit.register(lambda: os.unlink(temp_img_path) if os.path.exists(temp_img_path) else None)
+            
+            # Add all extracted text for this slide
+            if slide_text:
+                text_content.extend(slide_text)
+            if slide_image_text:
+                text_content.extend(slide_image_text)
+            
+            text_content.append("")  # Empty line between slides
+        
+        result = "\n".join(text_content)
+        slide_count = len(presentation.slides)
+        print(f"📊 DEBUG: Extracted text from {slide_count} slides from PowerPoint (including OCR)")
+        return result if result.strip() else "PowerPoint file appears to contain no text"
+        
+    except Exception as e:
+        raise Exception(f"Failed to read PowerPoint file: {str(e)}")
+
+def extract_text_from_zip(file_path: str) -> str:
+    """Extract text from ZIP file (list contents and extract text files)"""
+    try:
+        text_content = ["ZIP Archive Contents:"]
+        
+        with zipfile.ZipFile(file_path, 'r') as zip_file:
+            file_list = zip_file.namelist()
+            text_content.extend([f"- {filename}" for filename in file_list[:50]])  # Limit to 50 files
+            
+            if len(file_list) > 50:
+                text_content.append(f"... and {len(file_list) - 50} more files")
+            
+            # Try to extract text from .txt files in the ZIP
+            text_content.append("\nText file contents:")
+            for filename in file_list[:10]:  # Only process first 10 files
+                if filename.lower().endswith(('.txt', '.md', '.csv')):
+                    try:
+                        with zip_file.open(filename) as file:
+                            content = file.read().decode('utf-8', errors='ignore')
+                            text_content.append(f"\n--- {filename} ---")
+                            text_content.append(content[:1000])  # First 1000 chars only
+                    except:
+                        continue
+        
+        return "\n".join(text_content)
+    except Exception as e:
+        raise Exception(f"Failed to read ZIP file: {str(e)}")
+
+
 def find_table_start(sheet) -> tuple:
     """Find where structured table data starts by looking for header patterns"""
     
@@ -440,64 +545,7 @@ def is_empty_or_header_row(row_data: list, headers: list) -> bool:
         if val.strip().lower() == header.lower():
             matches += 1
     
-    return matches >= len(headers) * 0.7  # 70% match with headers
-
-def extract_text_from_image(file_path: str) -> str:
-    """Extract text from image using OCR"""
-    try:
-        image = Image.open(file_path)
-        text = pytesseract.image_to_string(image)
-        return text.strip() if text.strip() else "No text found in the image"
-    except Exception as e:
-        raise Exception(f"Failed to process image file: {str(e)}")
-
-def extract_text_from_pptx(file_path: str) -> str:
-    """Extract text from PowerPoint file"""
-    try:
-        presentation = Presentation(file_path)
-        text_content = []
-        
-        for i, slide in enumerate(presentation.slides, 1):
-            text_content.append(f"Slide {i}:")
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    text_content.append(shape.text.strip())
-            text_content.append("")  # Empty line between slides
-        
-        result = "\n".join(text_content)
-        return result if result.strip() else "PowerPoint file appears to contain no text"
-    except Exception as e:
-        raise Exception(f"Failed to read PowerPoint file: {str(e)}")
-
-def extract_text_from_zip(file_path: str) -> str:
-    """Extract text from ZIP file (list contents and extract text files)"""
-    try:
-        text_content = ["ZIP Archive Contents:"]
-        
-        with zipfile.ZipFile(file_path, 'r') as zip_file:
-            file_list = zip_file.namelist()
-            text_content.extend([f"- {filename}" for filename in file_list[:50]])  # Limit to 50 files
-            
-            if len(file_list) > 50:
-                text_content.append(f"... and {len(file_list) - 50} more files")
-            
-            # Try to extract text from .txt files in the ZIP
-            text_content.append("\nText file contents:")
-            for filename in file_list[:10]:  # Only process first 10 files
-                if filename.lower().endswith(('.txt', '.md', '.csv')):
-                    try:
-                        with zip_file.open(filename) as file:
-                            content = file.read().decode('utf-8', errors='ignore')
-                            text_content.append(f"\n--- {filename} ---")
-                            text_content.append(content[:1000])  # First 1000 chars only
-                    except:
-                        continue
-        
-        return "\n".join(text_content)
-    except Exception as e:
-        raise Exception(f"Failed to read ZIP file: {str(e)}")
-    
-
+    return matches >= len(headers) * 0.7  # 70% match with headers   
 
 def chunk_excel_data(excel_data: dict, chunk_size: int = 5) -> list:
     """Chunk Excel structured data row-wise with column names per sheet"""

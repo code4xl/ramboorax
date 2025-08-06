@@ -5,7 +5,7 @@ import random
 import asyncio
 
 # Directory to store vector stores
-CACHE_DIR = "vector_cache_context" #vector_cache_minilm
+CACHE_DIR = "vector_cache_submit" #vector_cache_minilm
 
 # Ensure base cache directory exists
 os.makedirs(CACHE_DIR, exist_ok=True)

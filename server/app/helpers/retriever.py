@@ -126,7 +126,7 @@ def get_similar_contexts_original(vector_store, question: str, k: int = 5):
             docs.append(doc)
     
     # Debug output
-    print(f"📊 DEBUG: Retrieved {len(docs)} chunks with LangChain wrapper")
+    # print(f"📊 DEBUG: Retrieved {len(docs)} chunks with LangChain wrapper")
     # for i, doc in enumerate(docs[:3]):
     #     print(f"🎯 Chunk {i+1} (sim: {doc.metadata.get('similarity_score', 0):.3f}): {doc.page_content[:150]}...")
     
