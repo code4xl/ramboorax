@@ -5,10 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 import math
 
 embedding_model = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-small-en-v1.5",
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
     model_kwargs={"device": "cpu"},
     encode_kwargs={"batch_size": 128}
-
 )
 
 def embed_chunks(chunks):

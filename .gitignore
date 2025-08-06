@@ -88,3 +88,5 @@ AdminPanel/
 vector_cache/
 vector_cache_large/
 prompts/
+vector_cache_minilm/
+demo/

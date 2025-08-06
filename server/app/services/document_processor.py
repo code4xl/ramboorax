@@ -26,12 +26,33 @@ class DocumentProcessorService:
             print("✅ Using cached vector store.")
         else:
             print("📥 Downloading and embedding new document.")
-            raw_text = extract_text_from_url(document_url)
-            # chunks = chunk_text(raw_text)
-            chunks = chunk_text_parallel(raw_text, num_threads=4)
-            # db = embed_chunks(chunks)
-            db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4)
-            save_vector_store(db, document_url)
+            #Extract text with Error handling
+            extraction_result = extract_text_from_url(document_url)
+        
+            if extraction_result["isError"]:
+                print(f"❌ ERROR: {extraction_result['message']}")
+                # Return the same error message for all questions
+                error_message = f"Unable to process document: {extraction_result['message']}"
+                return [error_message] * len(questions)
+            
+            raw_text = extraction_result["text"]
+            
+            # Check if extracted text is meaningful
+            if not raw_text or len(raw_text.strip()) < 50:
+                error_message = "The document appears to be empty or contains insufficient content for processing."
+                print(f"❌ ERROR: {error_message}")
+                return [error_message] * len(questions)
+            try:                
+                # chunks = chunk_text(raw_text)
+                chunks = chunk_text_parallel(raw_text, num_threads=4)
+                # db = embed_chunks(chunks)
+                db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4)
+                save_vector_store(db, document_url)
+                print("✅ Document processed and cached successfully.")
+            except Exception as e:
+                error_message = f"Failed to process document content: {str(e)}"
+                print(f"❌ ERROR: {error_message}")
+                return [error_message] * len(questions)
 
         if isCachingEnabled:
             # Check Q&A cache

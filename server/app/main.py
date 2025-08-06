@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Header, HTTPException, Request
-from app.routes import query_retrieval
+from app.routes import query_retrieval, cache_management
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -136,6 +136,7 @@ app.add_middleware(
 app.add_middleware(FixQuotesMiddleware)
 
 app.include_router(query_retrieval.router, prefix="/api/v1/hackrx", tags=["Query Retrieval"])
+app.include_router(cache_management.router, prefix="/api/v1/cache", tags=["Cache Management"])
 
 @app.get("/")
 async def root():

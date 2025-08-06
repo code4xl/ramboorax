@@ -13,3 +13,19 @@ class EditAnswerRequest(BaseModel):
     questions: List[str]  # Keep this for cache key generation
     target_question: str  # The exact question text to update
     new_answer: str       # New answer text
+
+class URLLookupRequest(BaseModel):
+    url: str
+
+class URLLookupResponse(BaseModel):
+    found: bool
+    record: str = None
+    message: str
+
+class URLDeleteRequest(BaseModel):
+    url: str
+
+class URLDeleteResponse(BaseModel):
+    success: bool
+    message: str
+    deleted_record: str = None
