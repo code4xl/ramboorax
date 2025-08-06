@@ -107,7 +107,7 @@ QUESTIONS AND CONTEXT:
             # 2) Call Gemini
             api_key = get_next_api_key()
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash-lite")
             response = model.generate_content(current_prompt)
             raw = response.text.strip()
 
@@ -300,7 +300,7 @@ Please fix it for me."""
         # Get next API key and configure
         api_key = get_next_api_key()
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
         
         response = model.generate_content(fix_prompt)
         fixed_json = response.text.strip()
