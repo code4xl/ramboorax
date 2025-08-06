@@ -5,7 +5,7 @@ import random
 import asyncio
 
 # Directory to store vector stores
-CACHE_DIR = "vector_cache"
+CACHE_DIR = "vector_cache_minilm"
 
 # Ensure base cache directory exists
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -126,3 +126,28 @@ def calculate_realistic_delay(question_count: int) -> float:
         base_time = 5.0
         extra_time = (question_count - 25) * 1.2
         return random.uniform(base_time, base_time + extra_time)
+    
+def get_current_mapping():
+    """Get the current URL mapping"""
+    global url_mapping
+    if os.path.exists(MAPPING_FILE):
+        with open(MAPPING_FILE, "rb") as f:
+            url_mapping = pickle.load(f)
+    return url_mapping
+
+def update_mapping(new_mapping):
+    """Update the URL mapping"""
+    global url_mapping
+    url_mapping = new_mapping
+    with open(MAPPING_FILE, "wb") as f:
+        pickle.dump(url_mapping, f)
+
+def reload_mapping():
+    """Reload the mapping from file"""
+    global url_mapping
+    if os.path.exists(MAPPING_FILE):
+        with open(MAPPING_FILE, "rb") as f:
+            url_mapping = pickle.load(f)
+    else:
+        url_mapping = {}
+    return url_mapping
