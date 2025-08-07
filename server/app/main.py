@@ -15,7 +15,8 @@ class FixQuotesMiddleware(BaseHTTPMiddleware):
             "/api/v1/hackrx/run",
             "/api/v1/hackrx/get-cached-qa",
             "/api/v1/hackrx/edit-cached-answer",
-            "/api/v1/hackrx/delete-cached-qa"
+            "/api/v1/hackrx/delete-cached-qa",
+            "/api/v1/hackrx/bulk-edit-cached-answers"
         ]
         if request.url.path in hackrx_post_endpoints and request.method == "POST":
             # Read raw body

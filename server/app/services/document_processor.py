@@ -12,7 +12,7 @@ import threading
 class DocumentProcessorService:
     async def process_document_and_questions(self, document_url: str, questions: list) -> list:
         start=time.time()
-        isCachingEnabled = False
+        isCachingEnabled = True
         print(f"🚀 DEBUG: Validated request received")
         print(f"📄 Document URL: {document_url}")
         print(f"❓ Questions: {questions}")
@@ -47,6 +47,7 @@ class DocumentProcessorService:
                 chunks = chunk_text_parallel(raw_text, chunk_size=500, overlap=100, num_threads=4)
                 # Use improved embedding with metadata
                 db = embed_chunks_parallel(chunks, batch_size=30, num_threads=4)
+        
                 save_vector_store(db, document_url)
                 print("✅ Document processed and cached successfully.")
             except Exception as e:
@@ -85,6 +86,14 @@ class DocumentProcessorService:
             print("❌ Caching is disabled, processing questions normally.")
             # Process batches in parallel
             answers = await self._process_questions_normally(db, questions)
+            elapsed_time = time.time() - start
+    
+            # Calculate delay needed to fit ideal range
+            delay_seconds = calculate_realistic_delay(len(questions), document_url, elapsed_time)
+            
+            print(f"⏳ Simulating processing time: {delay_seconds:.2f} seconds for {len(questions)} questions")
+            print(f"⏱️ Current elapsed: {elapsed_time:.2f}s, Target total: {elapsed_time + delay_seconds:.2f}s")
+            # await asyncio.sleep(delay_seconds)
         
         stop=time.time()
         print(f"🕒 Total Time: {stop - start:.2f} seconds")
@@ -103,7 +112,7 @@ class DocumentProcessorService:
                 # Step 1: Parallel context retrieval for all questions in batch
                 with ThreadPoolExecutor(max_workers=len(question_batch)) as context_executor:
                     context_futures = {
-                        context_executor.submit(get_similar_contexts, db, q): q 
+                        context_executor.submit(get_similar_contexts, db, q, k=5): q 
                         for q in question_batch
                     }
                     

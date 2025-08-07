@@ -1,4 +1,7 @@
 import numpy as np
+import faiss
+from sentence_transformers import SentenceTransformer
+from langchain.docstore.document import Document
 from app.helpers.embedder import embedding_model
 import re
 from typing import List, Tuple
@@ -24,6 +27,7 @@ def extract_key_terms(question: str) -> List[str]:
     
     key_terms = quoted_phrases + capitalized_terms + numbers_dates + important_words
     return list(set(key_terms))  # Remove duplicates
+
 
 def enhance_query_comprehensive(question: str) -> str:
     """Enhanced query expansion based on question type and content"""
