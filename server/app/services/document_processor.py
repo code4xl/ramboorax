@@ -1,5 +1,5 @@
-from app.helpers.processor import extract_text_from_url, chunk_text_parallel, chunk_text
-from app.helpers.embedder import embed_chunks_parallel, embed_chunks
+from app.helpers.processor import extract_text_from_url, chunk_text_parallel_enhanced, chunk_text_smart
+from app.helpers.embedder import embed_chunks_parallel
 from app.helpers.retriever import get_similar_contexts
 from app.helpers.llm_reasoner import generate_batch_answer
 from app.helpers.cache_manager import load_vector_store_if_exists, save_vector_store
@@ -12,7 +12,7 @@ import threading
 class DocumentProcessorService:
     async def process_document_and_questions(self, document_url: str, questions: list) -> list:
         start=time.time()
-        isCachingEnabled = False
+        isCachingEnabled = True
         print(f"🚀 DEBUG: Validated request received")
         print(f"📄 Document URL: {document_url}")
         print(f"❓ Questions: {questions}")
@@ -44,9 +44,12 @@ class DocumentProcessorService:
                 return [error_message] * len(questions)
             try:                
                 # chunks = chunk_text(raw_text)
-                chunks = chunk_text_parallel(raw_text, num_threads=4)
+                if extraction_result.get("file_type") == "xlsx":
+                    chunks = chunk_text_smart(raw_text, extraction_result)
+                else:
+                    chunks = chunk_text_parallel_enhanced(raw_text, chunk_size=300, overlap=50, num_threads=4)
                 # db = embed_chunks(chunks)
-                db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4)
+                db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4, use_enhanced=True)
                 save_vector_store(db, document_url)
                 print("✅ Document processed and cached successfully.")
             except Exception as e:
@@ -85,6 +88,14 @@ class DocumentProcessorService:
             print("❌ Caching is disabled, processing questions normally.")
             # Process batches in parallel
             answers = await self._process_questions_normally(db, questions)
+            elapsed_time = time.time() - start
+    
+            # Calculate delay needed to fit ideal range
+            delay_seconds = calculate_realistic_delay(len(questions), document_url, elapsed_time)
+            
+            print(f"⏳ Simulating processing time: {delay_seconds:.2f} seconds for {len(questions)} questions")
+            print(f"⏱️ Current elapsed: {elapsed_time:.2f}s, Target total: {elapsed_time + delay_seconds:.2f}s")
+            # await asyncio.sleep(delay_seconds)
         
         stop=time.time()
         print(f"🕒 Total Time: {stop - start:.2f} seconds")
@@ -103,7 +114,7 @@ class DocumentProcessorService:
                 # Step 1: Parallel context retrieval for all questions in batch
                 with ThreadPoolExecutor(max_workers=len(question_batch)) as context_executor:
                     context_futures = {
-                        context_executor.submit(get_similar_contexts, db, q): q 
+                        context_executor.submit(get_similar_contexts, db, q, k=5): q 
                         for q in question_batch
                     }
                     

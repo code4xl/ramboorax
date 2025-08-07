@@ -1,2 +1,2 @@
-from .schemas import QueryRequest, QueryResponse, EditAnswerRequest, URLLookupRequest, URLLookupResponse, URLDeleteRequest, URLDeleteResponse
-__all__ = ["QueryRequest", "QueryResponse", "EditAnswerRequest", "URLLookupRequest", "URLLookupResponse", "URLDeleteRequest", "URLDeleteResponse"]
+from .schemas import QueryRequest, QueryResponse, EditAnswerRequest, URLLookupRequest, URLLookupResponse, URLDeleteRequest, URLDeleteResponse, BulkEditAnswersRequest
+__all__ = ["QueryRequest", "QueryResponse", "EditAnswerRequest", "URLLookupRequest", "URLLookupResponse", "URLDeleteRequest", "URLDeleteResponse", "BulkEditAnswersRequest"]
