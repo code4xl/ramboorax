@@ -195,29 +195,62 @@ def extract_text_from_url(file_url: str) -> dict:
             "message": f"Unexpected error occurred while processing the file: {str(e)}"
         }
 
-# Add this to your processor.py file
-
-def chunk_text_enhanced(text: str, chunk_size: int = 300, overlap: int = 50) -> list:
-    """Enhanced chunking that matches your working standalone code"""
-    words = text.split()
+def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list:
+    """
+    Improved chunking with sentence boundary preservation and better overlap
+    """
+    import re
+    
+    # Split into sentences first
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    
     chunks = []
-    for i in range(0, len(words), chunk_size - overlap):
-        chunk = " ".join(words[i:i + chunk_size])
-        chunks.append(chunk)
+    current_chunk = []
+    current_word_count = 0
+    
+    for sentence in sentences:
+        sentence_words = len(sentence.split())
+        
+        # If adding this sentence would exceed chunk_size, create a new chunk
+        if current_word_count + sentence_words > chunk_size and current_chunk:
+            chunk_text = " ".join(current_chunk)
+            chunks.append(chunk_text)
+            
+            # Keep overlap sentences for context
+            overlap_words = 0
+            overlap_sentences = []
+            for i in range(len(current_chunk) - 1, -1, -1):
+                sentence_word_count = len(current_chunk[i].split())
+                if overlap_words + sentence_word_count <= overlap:
+                    overlap_sentences.insert(0, current_chunk[i])
+                    overlap_words += sentence_word_count
+                else:
+                    break
+            
+            current_chunk = overlap_sentences + [sentence]
+            current_word_count = overlap_words + sentence_words
+        else:
+            current_chunk.append(sentence)
+            current_word_count += sentence_words
+    
+    # Add the last chunk if it exists
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+    
     return chunks
 
-def chunk_text_parallel_enhanced(text: str, chunk_size: int = 300, overlap: int = 50, num_threads: int = 4) -> list:
+def chunk_text_parallel(text: str, chunk_size: int = 500, overlap: int = 100, num_threads: int = 4) -> list:
     """
-    Enhanced parallel chunking with better parameters
+    Split text into chunks using parallel processing for large documents with improved chunking
     """
     words = text.split()
     total_words = len(words)
     
-    # If document is small, use enhanced regular chunking
-    if total_words < 1000:
-        return chunk_text_enhanced(text, chunk_size, overlap)
+    # If document is small, use regular chunking
+    if total_words < 2000:
+        return chunk_text(text, chunk_size, overlap)
     
-    # Calculate words per thread
+    # Calculate words per thread with larger segments
     words_per_thread = math.ceil(total_words / num_threads)
     
     def process_segment(start_idx, end_idx):
@@ -229,7 +262,7 @@ def chunk_text_parallel_enhanced(text: str, chunk_size: int = 300, overlap: int 
     segments = []
     for i in range(num_threads):
         start_idx = i * words_per_thread
-        end_idx = min((i + 1) * words_per_thread + overlap, total_words)
+        end_idx = min((i + 1) * words_per_thread + overlap * 2, total_words)  # Increased overlap
         if start_idx < total_words:
             segments.append((start_idx, end_idx))
     
@@ -242,7 +275,23 @@ def chunk_text_parallel_enhanced(text: str, chunk_size: int = 300, overlap: int 
             chunks = future.result()
             all_chunks.extend(chunks)
     
-    return all_chunks
+    # Remove near-duplicate chunks that might result from overlapping
+    deduplicated_chunks = []
+    for i, chunk in enumerate(all_chunks):
+        is_duplicate = False
+        for existing_chunk in deduplicated_chunks:
+            # Check for significant overlap (>70%)
+            chunk_words = set(chunk.lower().split())
+            existing_words = set(existing_chunk.lower().split())
+            overlap_ratio = len(chunk_words.intersection(existing_words)) / max(len(chunk_words), len(existing_words))
+            if overlap_ratio > 0.7:
+                is_duplicate = True
+                break
+        
+        if not is_duplicate:
+            deduplicated_chunks.append(chunk)
+    
+    return deduplicated_chunks
 
 
 def is_fraudulent_url(url: str) -> bool:

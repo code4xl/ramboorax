@@ -1,6 +1,6 @@
-from app.helpers.processor import extract_text_from_url, chunk_text_parallel_enhanced, chunk_text_smart
-from app.helpers.embedder import embed_chunks_parallel
-from app.helpers.retriever import get_similar_contexts
+from app.helpers.processor import extract_text_from_url, chunk_text_parallel, chunk_text
+from app.helpers.embedder import embed_chunks_parallel, embed_chunks
+from app.helpers.retriever import get_similar_contexts, get_fallback_contexts
 from app.helpers.llm_reasoner import generate_batch_answer
 from app.helpers.cache_manager import load_vector_store_if_exists, save_vector_store
 from app.helpers.cache_manager import generate_qa_cache_key, load_qa_cache_if_exists, save_qa_cache, calculate_realistic_delay
@@ -43,13 +43,11 @@ class DocumentProcessorService:
                 print(f"❌ ERROR: {error_message}")
                 return [error_message] * len(questions)
             try:                
-                # chunks = chunk_text(raw_text)
-                if extraction_result.get("file_type") == "xlsx":
-                    chunks = chunk_text_smart(raw_text, extraction_result)
-                else:
-                    chunks = chunk_text_parallel_enhanced(raw_text, chunk_size=300, overlap=50, num_threads=4)
-                # db = embed_chunks(chunks)
-                db = embed_chunks_parallel(chunks, batch_size=50, num_threads=4, use_enhanced=True)
+                # Use improved chunking with larger, more contextual chunks
+                chunks = chunk_text_parallel(raw_text, chunk_size=500, overlap=100, num_threads=4)
+                # Use improved embedding with metadata
+                db = embed_chunks_parallel(chunks, batch_size=30, num_threads=4)
+        
                 save_vector_store(db, document_url)
                 print("✅ Document processed and cached successfully.")
             except Exception as e:
@@ -119,13 +117,42 @@ class DocumentProcessorService:
                     }
                     
                     contexts = []
-                    for future in as_completed(context_futures):
+                    questions_for_fallback = []
+                    fallback_indices = []
+                    
+                    for idx, future in enumerate(as_completed(context_futures)):
                         try:
                             context = future.result()
-                            contexts.append(context)
+                            # Check if context quality is poor (too few or very short chunks)
+                            if not context or len(context) < 3 or all(len(doc.page_content.split()) < 20 for doc in context):
+                                print(f"⚠️ Poor context quality for question, will use fallback")
+                                contexts.append([])
+                                questions_for_fallback.append(context_futures[future])
+                                fallback_indices.append(len(contexts) - 1)
+                            else:
+                                contexts.append(context)
                         except Exception as e:
                             print(f"❌ Context retrieval error: {e}")
                             contexts.append([])  # Empty context as fallback
+                            questions_for_fallback.append(context_futures[future])
+                            fallback_indices.append(len(contexts) - 1)
+                
+                # Try fallback retrieval for failed questions
+                if questions_for_fallback:
+                    print(f"🔄 Using fallback retrieval for {len(questions_for_fallback)} questions")
+                    with ThreadPoolExecutor(max_workers=len(questions_for_fallback)) as fallback_executor:
+                        fallback_futures = {
+                            fallback_executor.submit(get_fallback_contexts, db, q): i 
+                            for i, q in enumerate(questions_for_fallback)
+                        }
+                        
+                        for future in as_completed(fallback_futures):
+                            try:
+                                fallback_context = future.result()
+                                original_idx = fallback_indices[fallback_futures[future]]
+                                contexts[original_idx] = fallback_context
+                            except Exception as e:
+                                print(f"❌ Fallback retrieval error: {e}")
                 
                 # Step 2: Generate answers for the batch
                 batch_answers = generate_batch_answer(contexts, question_batch)

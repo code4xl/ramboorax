@@ -7,11 +7,11 @@ import numpy as np
 import faiss
 import math
 
-# Keep original for compatibility
+# Use a more powerful embedding model for better document retrieval
 embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    model_name="sentence-transformers/all-mpnet-base-v2",  # Better for document retrieval
     model_kwargs={"device": "cpu"},
-    encode_kwargs={"batch_size": 512, "num_workers": 4}
+    encode_kwargs={"batch_size": 64, "normalize_embeddings": True}  # Normalize for better similarity
 )
 
 # Direct SentenceTransformer model (matches your working code)
@@ -99,8 +99,18 @@ class EnhancedFAISSVectorStore:
         return self.langchain_db.merge_from(other.langchain_db if hasattr(other, 'langchain_db') else other)
 
 def embed_chunks(chunks):
-    """Standard embedding function"""
-    docs = [Document(page_content=chunk) for chunk in chunks]
+  
+    """Create embeddings with improved metadata for better retrieval"""
+    docs = []
+    for i, chunk in enumerate(chunks):
+        # Add chunk metadata for better context
+        metadata = {
+            "chunk_id": i,
+            "chunk_length": len(chunk.split()),
+            "chunk_start": chunk[:100] + "..." if len(chunk) > 100 else chunk
+        }
+        docs.append(Document(page_content=chunk, metadata=metadata))
+        
     db = FAISS.from_documents(docs, embedding_model)
     return db
 
@@ -132,7 +142,15 @@ def embed_chunks_parallel(chunks, batch_size: int = 50, num_threads: int = 4, us
     chunk_batches = [chunks[i:i + batch_size] for i in range(0, len(chunks), batch_size)]
     
     def create_batch_embeddings(batch_chunks):
-        docs = [Document(page_content=chunk) for chunk in batch_chunks]
+        docs = []
+        for i, chunk in enumerate(batch_chunks):
+            # Add metadata for each chunk
+            metadata = {
+                "chunk_id": len(docs),  # Global chunk ID across batches
+                "chunk_length": len(chunk.split()),
+                "chunk_start": chunk[:100] + "..." if len(chunk) > 100 else chunk
+            }
+            docs.append(Document(page_content=chunk, metadata=metadata))
         return FAISS.from_documents(docs, embedding_model)
     
     # Process batches in parallel
