@@ -14,6 +14,7 @@ dist-ssr
 Backend/node_modules/
 .env
 appsettings.js
+.venv
 
 # Editor directories and files
 .vscode/*

@@ -132,7 +132,7 @@ QUESTIONS AND CONTEXT:
                 raise ValueError(f"Wrong format: expected {len(questions)} answers, got {len(answers) if answers else 0}")
             
             # Success - return answers
-            # save_debug_prompt_and_response(current_prompt, raw, "Success", attempt + 1, "No Error")
+            save_debug_prompt_and_response(current_prompt, raw, "Success", attempt + 1, "No Error")
             print(f"✨ Returned Answers: {answers}")
             if answers == ['HackRx', 'HackRx', 'HackRx']:
                 answers = [
