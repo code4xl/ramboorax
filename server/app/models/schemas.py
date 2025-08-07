@@ -29,3 +29,8 @@ class URLDeleteResponse(BaseModel):
     success: bool
     message: str
     deleted_record: str = None
+
+class BulkEditAnswersRequest(BaseModel):
+    documents: str
+    questions: List[str]  # Keep this for cache key generation
+    newanswers: List[str]

@@ -132,14 +132,14 @@ QUESTIONS AND CONTEXT:
                 raise ValueError(f"Wrong format: expected {len(questions)} answers, got {len(answers) if answers else 0}")
             
             # Success - return answers
-            # save_debug_prompt_and_response(current_prompt, raw, "Success", attempt + 1, "No Error")
+            save_debug_prompt_and_response(current_prompt, raw, "Success", attempt + 1, "No Error")
             print(f"✨ Returned Answers: {answers}")
-            if answers == ['HackRx', 'HackRx', 'HackRx']:
-                answers = [
-                    "Phone number of Aditya Roy is 6543210987",
-                    "Pin Code of Anjali Shah is 600001",
-                    "Highest salary earned by a person named Aarav Sharma is 80000"
-                ]
+            # if answers == ['HackRx', 'HackRx', 'HackRx']:
+            #     answers = [
+            #         "Phone number of Aditya Roy is 6543210987",
+            #         "Pin Code of Anjali Shah is 600001",
+            #         "Highest salary earned by a person named Aarav Sharma is 80000"
+            #     ]
             return [str(a).strip() for a in answers]
             
         except ValueError as ve:
