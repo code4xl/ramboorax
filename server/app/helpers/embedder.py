@@ -11,7 +11,7 @@ import math
 embedding_model = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
     model_kwargs={"device": "cpu"},
-    encode_kwargs={"batch_size": 128}
+    encode_kwargs={"batch_size": 512, "num_workers": 4}
 )
 
 # Direct SentenceTransformer model (matches your working code)
