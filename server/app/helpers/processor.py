@@ -115,10 +115,21 @@ def extract_text_from_url(file_url: str) -> dict:
             
             try:
                 extracted_text = ""
+                extracted_tables = []
                 
                 if ext == "pdf":
                     doc = fitz.open(f.name)
                     extracted_text = "\n".join([page.get_text() for page in doc])
+                    # doc = fitz.open(f.name)
+                    # text_parts = []
+                    
+                    # for page_num, page in enumerate(doc):
+                    #     page_text, page_tables = extract_page_with_table_separation(page, page_num + 1)
+                    #     text_parts.append(page_text)
+                    #     extracted_tables.extend(page_tables)
+                        # print(f"📄 Extracted tables from page {page_num + 1} with {page_tables} tables")
+                    
+                    # extracted_text = "\n".join(text_parts)
 
                 elif ext == "docx":
                     doc = docx.Document(f.name)
@@ -169,7 +180,8 @@ def extract_text_from_url(file_url: str) -> dict:
                 
                 return {
                     "isError": False,
-                    "text": extracted_text
+                    "text": extracted_text,
+                    "tables": extracted_tables
                 }
                     
             finally:
@@ -629,3 +641,93 @@ def chunk_text(text: str, chunk_size: int = 200, overlap: int = 50) -> list:
     for i in range(0, len(words), chunk_size - overlap):
         chunks.append(" ".join(words[i:i + chunk_size]))
     return chunks
+
+
+
+def extract_page_with_table_separation(page, page_num: int):
+    """Extract text and tables separately from a page"""
+    text_blocks = []
+    tables = []
+    table_regions = []
+    
+    # Step 1: Extract tables first
+    try:
+        page_tables = page.find_tables()
+        if page_tables:
+            for table in page_tables:
+                table_data = table.extract()
+                table_text = format_table_as_markdown(table_data)
+                
+                tables.append({
+                    "page": page_num,
+                    "content": table_text,
+                    "bbox": table.bbox if hasattr(table, 'bbox') else None
+                })
+                
+                # Store table bbox to exclude from text extraction
+                if hasattr(table, 'bbox'):
+                    table_regions.append(table.bbox)
+    except AttributeError:
+        # PyMuPDF version doesn't support find_tables
+        pass
+    
+    # Step 2: Extract text blocks excluding table regions
+    blocks = page.get_text("dict")
+    
+    for block in blocks.get("blocks", []):
+        if block.get("type") == 0:  # Text block
+            block_bbox = block.get("bbox", [0, 0, 0, 0])
+            
+            # Skip if block overlaps with any table region
+            if any(bbox_overlap(block_bbox, table_bbox) for table_bbox in table_regions):
+                continue
+                
+            for line in block.get("lines", []):
+                line_text = ""
+                line_bbox = line.get("bbox", [0, 0, 0, 0])
+                
+                # Skip if line overlaps with table
+                if any(bbox_overlap(line_bbox, table_bbox) for table_bbox in table_regions):
+                    continue
+                
+                for span in line.get("spans", []):
+                    line_text += span.get("text", "")
+                    
+                if line_text.strip():
+                    text_blocks.append(line_text.strip())
+    
+    return "\n".join(text_blocks), tables
+
+def format_table_as_markdown(table_data):
+    """Format table data as markdown"""
+    if not table_data:
+        return ""
+    
+    result = []
+    # Header row
+    result.append("| " + " | ".join(str(cell) if cell else "" for cell in table_data[0]) + " |")
+    result.append("|" + "|".join(["---"] * len(table_data[0])) + "|")
+    
+    # Data rows
+    for row in table_data[1:]:
+        result.append("| " + " | ".join(str(cell) if cell else "" for cell in row) + " |")
+    
+    return "\n".join(result)
+
+def bbox_overlap(bbox1, bbox2, threshold=0.3):
+    """Check if two bounding boxes overlap significantly"""
+    x0_1, y0_1, x1_1, y1_1 = bbox1
+    x0_2, y0_2, x1_2, y1_2 = bbox2
+    
+    # Calculate intersection
+    x0_i = max(x0_1, x0_2)
+    y0_i = max(y0_1, y0_2)
+    x1_i = min(x1_1, x1_2)
+    y1_i = min(y1_1, y1_2)
+    
+    if x0_i < x1_i and y0_i < y1_i:
+        intersection_area = (x1_i - x0_i) * (y1_i - y0_i)
+        bbox1_area = (x1_1 - x0_1) * (y1_1 - y0_1)
+        return (intersection_area / bbox1_area) > threshold
+    
+    return False
