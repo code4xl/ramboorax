@@ -3,7 +3,7 @@ from app.helpers.embedder import embed_chunks_parallel
 from app.helpers.retriever import get_similar_contexts
 from app.helpers.llm_reasoner import generate_batch_answer
 from app.helpers.cache_manager import load_vector_store_if_exists, save_vector_store
-from app.helpers.cache_manager import generate_qa_cache_key, load_qa_cache_if_exists, save_qa_cache, calculate_realistic_delay
+from app.helpers.cache_manager import generate_qa_cache_key, load_qa_cache_if_exists, save_qa_cache
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -64,11 +64,6 @@ class DocumentProcessorService:
         
             if cached_qa:
                 print("✅ Using cached Q&A answers.")
-                # Calculate and apply realistic delay
-                delay_seconds = calculate_realistic_delay(len(questions))
-                print(f"⏳ Simulating processing time: {delay_seconds:.2f} seconds for {len(questions)} questions")
-                
-                # await asyncio.sleep(delay_seconds)
                 # Map questions to answers maintaining input order
                 cached_questions = cached_qa["questions"]
                 cached_answers = cached_qa["answers"]
@@ -88,14 +83,6 @@ class DocumentProcessorService:
             print("❌ Caching is disabled, processing questions normally.")
             # Process batches in parallel
             answers = await self._process_questions_normally(db, questions)
-            elapsed_time = time.time() - start
-    
-            # Calculate delay needed to fit ideal range
-            delay_seconds = calculate_realistic_delay(len(questions), document_url, elapsed_time)
-            
-            print(f"⏳ Simulating processing time: {delay_seconds:.2f} seconds for {len(questions)} questions")
-            print(f"⏱️ Current elapsed: {elapsed_time:.2f}s, Target total: {elapsed_time + delay_seconds:.2f}s")
-            # await asyncio.sleep(delay_seconds)
         
         stop=time.time()
         print(f"🕒 Total Time: {stop - start:.2f} seconds")
