@@ -6,8 +6,47 @@ from dotenv import load_dotenv
 import threading
 import time
 from datetime import datetime
+import subprocess
+import asyncio
 
 load_dotenv()
+
+def check_nodejs_availability():
+    """Check if Node.js is available and working"""
+    try:
+        # Test Node.js version
+        result = subprocess.run(['node', '--version'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            print(f"✅ Node.js available: {version}")
+            
+            # Test a simple script execution
+            test_result = subprocess.run(
+                ['node', '-e', 'console.log("Node.js test successful")'], 
+                capture_output=True, text=True, timeout=5
+            )
+            if test_result.returncode == 0:
+                print("✅ Node.js execution test passed")
+                return True
+            else:
+                print(f"❌ Node.js execution test failed: {test_result.stderr}")
+                return False
+        else:
+            print(f"❌ Node.js version check failed: {result.stderr}")
+            return False
+    except subprocess.TimeoutExpired:
+        print("❌ Node.js check timeout")
+        return False
+    except FileNotFoundError:
+        print("❌ Node.js not installed or not in PATH")
+        return False
+    except Exception as e:
+        print(f"❌ Node.js check error: {e}")
+        return False
+
+# Call this during initialization
+if not check_nodejs_availability():
+    print("⚠️ Warning: Node.js not found. Code execution will not work.")
 
 API_KEYS = [
     os.getenv("GEMINI_API_KEY_1"),
@@ -26,7 +65,7 @@ def get_next_api_key():
         _key_counter += 1
         return key
 
-def generate_batch_answer(
+async def generate_batch_answer(
     contexts: list[list[Document]],
     questions: list[str],
     max_retries: int = 1
@@ -50,6 +89,31 @@ CRITICAL RULES:
 11. If the provided context does not contain any information and question is related to the same domain/topic Dont say its not in context, instead answer based on general knowledge.
 12. If the questions are about simple mathematical calculations, do not calculate just provide the answer from context reply "Information not available".
 
+CODE EXECUTION RULES:
+8. If the document contains APIs, endpoints, or step-by-step processes that need to be executed to get the answer, generate executable JavaScript code.
+9. When code execution is needed, write "EXECUTE_CODEindex" in the answer (e.g., "EXECUTE_CODE0").
+10. Provide corresponding executable JavaScript code in the "code" array.
+11. Code should be complete, self-contained, and handle the ENTIRE process from start to finish.
+12. Use async/await for API calls with proper error handling.
+13. Always console.log() the final result that answers the question.
+14. Use fetch() for HTTP requests and handle JSON responses.
+15. Follow ALL steps mentioned in the document sequentially.
+16. CRITICAL: When document shows mapping tables, create complete mapping objects in code.
+17. CRITICAL: Follow the exact logic flow: Step 1 → Get City, Step 2 → Map City to Landmark, Step 3 → Map Landmark to Endpoint.
+18. CRITICAL: Parse JSON responses correctly - check for nested data structures like response.data.city.
+19. CRITICAL: Handle all cities and landmarks mentioned in the tables systematically.
+
+JAVASCRIPT CODE REQUIREMENTS:
+- Use async/await pattern
+- Include proper error handling with try/catch
+- Use fetch() for API calls
+- Always console.log() the final answer
+- Handle JSON parsing properly (check response.data.city, response.city, etc.)
+- Include all necessary steps from the document
+- Create complete mapping objects based on provided tables
+- Make the code complete and executable
+- Follow the exact step-by-step process outlined in the document
+
 ADDITIONAL GUIDANCE:
 - For questions about improper procedures or incorrect practices, answer based on what the document states about proper requirements and specifications
 - If the document contains standards, guidelines, or recommended practices, reference those when answering related questions
@@ -57,6 +121,9 @@ ADDITIONAL GUIDANCE:
 
 OUTPUT FORMAT:
 Return ONLY valid JSON format (no extra text, explanations, or markdown):
+{"answers": ["Answer to Question 1", "Answer to Question 2", ...], "code": ["Complete JavaScript code block 0", "Complete JavaScript code block 1", ...]}
+
+If no code execution is needed, return:
 {"answers": ["Answer to Question 1", "Answer to Question 2", ...]}
 
 JSON FORMATTING RULES:
@@ -70,11 +137,31 @@ QUESTIONS AND CONTEXT:
     
     for idx, (q, ctx_docs) in enumerate(zip(questions, contexts), 1):
         ctx_text = "\n".join(d.page_content for d in ctx_docs)
-        prompt += (
-            f"\nQuestion {idx}: {q}\n"
-            f"Context {idx}:\n{ctx_text}\n"
-            f"{'='*50}\n"
-        )
+        prompt += f"\nQuestion {idx}: {q}\n"
+        prompt += f"Context {idx}:\n"
+        # Separate regular text and tables in context
+        regular_context = []
+        table_context = []
+
+        for doc in ctx_docs:
+            if "Table from page" in doc.page_content:
+                table_context.append(doc.page_content)
+            else:
+                regular_context.append(doc.page_content)
+        
+        # Add regular context
+        if regular_context:
+            prompt += "TEXT CONTENT:\n"
+            prompt += "\n".join(regular_context)
+            prompt += "\n"
+        
+        # Add table context with emphasis
+        if table_context:
+            prompt += "STRUCTURED DATA (TABLES):\n"
+            prompt += "\n".join(table_context)
+            prompt += "\n"
+        
+        prompt += f"{'='*50}\n"
     
     prompt += "\nIMPORTANT: Return ONLY the JSON object. No additional text or explanations."
 
@@ -126,11 +213,17 @@ QUESTIONS AND CONTEXT:
             # 5) Parse and validate
             payload = json.loads(json_str)
             answers = payload.get("answers")
+            code_blocks = payload.get("code", [])
             
             # Check for wrong format (this will trigger retry)
             if not isinstance(answers, list) or len(answers) != len(questions):
                 raise ValueError(f"Wrong format: expected {len(questions)} answers, got {len(answers) if answers else 0}")
             
+            # Execute code if present
+            if code_blocks:
+                print(f"🔧 Found {len(code_blocks)} code blocks to execute")
+                answers = await execute_code_and_replace_answers(answers, code_blocks)
+
             # Success - return answers
             save_debug_prompt_and_response(current_prompt, raw, "Success", attempt + 1, "No Error")
             print(f"✨ Returned Answers: {answers}")
@@ -322,3 +415,130 @@ Please fix it for me."""
     except Exception as fix_error:
         print(f"❌ Gemini fix also failed: {fix_error}")
         return ["Error processing response" for _ in questions]
+    
+
+async def execute_javascript_code(code: str) -> str:
+    """Execute JavaScript code using Node.js via stdin - no temp files"""
+    import subprocess
+    import asyncio
+    
+    try:
+        # Create the complete code with polyfills
+        full_code = f"""
+const https = require('https');
+const http = require('http');
+const {{ URL }} = require('url');
+
+// Fetch polyfill
+global.fetch = function(url, options = {{}}) {{
+    return new Promise((resolve, reject) => {{
+        const urlObj = new URL(url);
+        const isHttps = urlObj.protocol === 'https:';
+        const lib = isHttps ? https : http;
+        
+        const requestOptions = {{
+            hostname: urlObj.hostname,
+            port: urlObj.port || (isHttps ? 443 : 80),
+            path: urlObj.pathname + urlObj.search,
+            method: options.method || 'GET',
+            headers: {{
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                ...options.headers
+            }}
+        }};
+        
+        const req = lib.request(requestOptions, (res) => {{
+            let data = '';
+            res.on('data', (chunk) => {{ data += chunk; }});
+            res.on('end', () => {{
+                resolve({{
+                    ok: res.statusCode >= 200 && res.statusCode < 300,
+                    status: res.statusCode,
+                    json: () => Promise.resolve(JSON.parse(data)),
+                    text: () => Promise.resolve(data)
+                }});
+            }});
+            res.on('error', reject);
+        }});
+        
+        req.on('error', reject);
+        req.setTimeout(30000, () => {{ req.destroy(); reject(new Error('Timeout')); }});
+        req.end();
+    }});
+}};
+
+// User code
+(async () => {{
+    try {{
+        {code}
+    }} catch (error) {{
+        console.log('Error:', error.message);
+    }}
+}})();
+"""
+        
+        # Execute Node.js with code via stdin
+        process = subprocess.Popen(
+            ['node'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8'
+        )
+        
+        # Send code via stdin and get result
+        try:
+            stdout, stderr = process.communicate(input=full_code, timeout=45)
+            
+            if process.returncode == 0:
+                output = stdout.strip()
+                print(f"✅ JavaScript execution successful: {output}")
+                return output if output else "Code executed but no output"
+            else:
+                error_msg = stderr.strip()
+                print(f"❌ JavaScript execution failed: {error_msg}")
+                return f"Error: {error_msg}"
+                
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            print("❌ JavaScript execution timeout")
+            return "Error: Code execution timeout (45s)"
+            
+    except Exception as e:
+        print(f"❌ JavaScript execution error: {str(e)}")
+        return f"Error: {str(e)}"
+
+async def execute_code_and_replace_answers(answers: list, code_blocks: list) -> list:
+    """Execute JavaScript code blocks and replace EXECUTE_CODE placeholders with results"""
+    print(f"🔧 Executing {len(code_blocks)} JavaScript code blocks...")
+    
+    # Execute each code block
+    code_results = {}
+    
+    for i, code in enumerate(code_blocks):
+        try:
+            print(f"⚡ Executing JavaScript code block {i}...")
+            print(f"📝 Code preview: {code[:200]}...")  # Show more code for debugging
+            
+            result = await execute_javascript_code(code)
+            code_results[f"EXECUTE_CODE{i}"] = result
+            print(f"✅ Code block {i} result: {result}")
+            
+        except Exception as e:
+            print(f"❌ Code block {i} failed: {e}")
+            code_results[f"EXECUTE_CODE{i}"] = f"Code execution failed: {str(e)}"
+    
+    # Replace placeholders in answers
+    updated_answers = []
+    for answer in answers:
+        updated_answer = answer
+        for placeholder, result in code_results.items():
+            if placeholder in answer:
+                updated_answer = answer.replace(placeholder, str(result))
+        updated_answers.append(updated_answer)
+    
+    print(f"🎯 Final answers after code execution: {updated_answers}")
+    return updated_answers

@@ -19,30 +19,42 @@ class DocumentProcessorService:
         print(f"❓ Questions count: {len(questions) if hasattr(questions, '__len__') else 'N/A'}")
         print(f"❓ First few questions: {questions[:2] if len(questions) > 0 else 'None'}")
 
+        # NEW: Extract document first to determine processing strategy
+        extraction_result = extract_text_from_url(document_url)
+        
+        if extraction_result["isError"]:
+            print(f"❌ ERROR: {extraction_result['message']}")
+            error_message = f"Unable to process document: {extraction_result['message']}"
+            return [error_message] * len(questions)
+        
+        raw_text = extraction_result["text"]
+        tables = extraction_result.get("tables", [])
+        
+        # Check if extracted text is meaningful
+        if not raw_text or len(raw_text.strip()) < 50:
+            error_message = "The document appears to be empty or contains insufficient content for processing."
+            print(f"❌ ERROR: {error_message}")
+            return [error_message] * len(questions)
+        
+        # NEW: Determine page count and processing strategy
+        # page_count = self._estimate_page_count(raw_text, tables)
+        # print(f"📄 Estimated pages: {page_count}")
+        
+        if len(raw_text) < 30000:
+            print("📝 Small document detected - using direct processing without embeddings")
+            return await self._process_small_document(raw_text, tables, questions)
+        
+        # EXISTING FLOW: For large documents, continue with vector store logic
+        print("📚 Large document detected - using embedding-based processing")
+        
         # Use the URL directly to load/save cache
         db = load_vector_store_if_exists(document_url)
 
         if db is not None:
-            print("✅ Using cached vector store.")
+            print("✅ Cached vector store enabled.")
         else:
-            print("📥 Downloading and embedding new document.")
-            #Extract text with Error handling
-            extraction_result = extract_text_from_url(document_url)
-        
-            if extraction_result["isError"]:
-                print(f"❌ ERROR: {extraction_result['message']}")
-                # Return the same error message for all questions
-                error_message = f"Unable to process document: {extraction_result['message']}"
-                return [error_message] * len(questions)
-            
-            raw_text = extraction_result["text"]
-            
-            # Check if extracted text is meaningful
-            if not raw_text or len(raw_text.strip()) < 50:
-                error_message = "The document appears to be empty or contains insufficient content for processing."
-                print(f"❌ ERROR: {error_message}")
-                return [error_message] * len(questions)
-            try:                
+            print("📥 Embedding new large document.")
+            try:                        
                 # chunks = chunk_text(raw_text)
                 if extraction_result.get("file_type") == "xlsx":
                     chunks = chunk_text_smart(raw_text, extraction_result)
@@ -75,19 +87,124 @@ class DocumentProcessorService:
                 answers = [qa_mapping.get(q, "❌ Answer not found") for q in questions]
 
             else:                 
-                # Process batches in parallel
-                answers = await self._process_questions_normally(db, questions)
+                # NEW: Process with table awareness
+                answers = await self._process_questions_with_tables(db, questions, tables)
                 # Save to Q&A cache
                 save_qa_cache(qa_cache_key, questions, answers)
         else:
             print("❌ Caching is disabled, processing questions normally.")
-            # Process batches in parallel
-            answers = await self._process_questions_normally(db, questions)
-        
+            # NEW: Process with table awareness
+            answers = await self._process_questions_with_tables(db, questions, tables)
+            
         stop=time.time()
         print(f"🕒 Total Time: {stop - start:.2f} seconds")
         return answers
     
+
+    def _estimate_page_count(self, text: str, tables: list) -> int:
+        """Estimate page count based on content"""
+        # Count explicit page markers in tables
+        page_numbers = set()
+        for table in tables:
+            page_numbers.add(table.get("page", 1))
+        
+        if page_numbers:
+            return max(page_numbers)
+        
+        # Fallback: estimate based on text length (rough estimate)
+        chars_per_page = 2000  # Approximate
+        estimated = max(1, len(text) // chars_per_page)
+        return estimated
+
+    async def _process_small_document(self, text: str, tables: list, questions: list) -> list:
+        """Process small documents without embeddings"""
+        print("🔄 Processing small document directly")
+        
+        # Create contexts for each question by checking relevance
+        contexts = []
+        for question in questions:
+            context_parts = [text]  # Always include main text
+            
+            # Check if question relates to any table content
+            relevant_tables = self._find_relevant_tables(question, tables)
+            if relevant_tables:
+                print(f"📊 Found {len(relevant_tables)} relevant tables for question")
+                for table in relevant_tables:
+                    context_parts.append(f"\nTable from page {table['page']}:\n{table['content']}")
+            
+            combined_context = "\n\n".join(context_parts)
+            # Convert to Document objects for consistency with existing code
+            from langchain.docstore.document import Document
+            contexts.append([Document(page_content=combined_context)])
+        
+        # Use existing batch answer generation
+        answers = await generate_batch_answer(contexts, questions)
+        return answers
+
+    def _find_relevant_tables(self, question: str, tables: list) -> list:
+        """Find tables that might contain relevant information for the question"""
+        # relevant_tables = []
+        # question_lower = question.lower()
+        
+        # # Extract key terms from question
+        # key_terms = self._extract_question_keywords(question_lower)
+        
+        # for table in tables:
+        #     table_content_lower = table['content'].lower()
+            
+        #     # Check if any key terms appear in table
+        #     if any(term in table_content_lower for term in key_terms):
+        #         relevant_tables.append(table)
+        
+        return tables
+
+    def _extract_question_keywords(self, question: str) -> list:
+        """Extract important keywords from question"""
+        # Remove common words
+        stop_words = {'the', 'is', 'at', 'which', 'on', 'and', 'or', 'but', 'in', 'with', 'a', 'an', 'to', 'for', 'of', 'as', 'by', 'what', 'who', 'where', 'when', 'how', 'why'}
+        
+        # Split and filter
+        words = question.split()
+        keywords = []
+        
+        for word in words:
+            clean_word = word.strip('.,?!()[]{}";:').lower()
+            if len(clean_word) > 2 and clean_word not in stop_words:
+                keywords.append(clean_word)
+        
+        return keywords
+
+    async def _process_questions_with_tables(self, db, questions: list, tables: list) -> list:
+        """Process questions with table awareness for large documents"""
+        contexts = []
+        
+        for question in questions:
+            # Get vector-based context
+            from app.helpers.retriever import get_similar_contexts
+            vector_context = get_similar_contexts(db, question, k=10)
+            
+            # Find relevant tables
+            relevant_tables = self._find_relevant_tables(question, tables)
+            
+            # Combine contexts
+            combined_docs = vector_context.copy()
+            
+            # Add table context if relevant
+            if relevant_tables:
+                print(f"📊 Adding {len(relevant_tables)} tables to context for question")
+                from langchain.docstore.document import Document
+                for table in relevant_tables:
+                    table_doc = Document(
+                        page_content=f"Table from page {table['page']}:\n{table['content']}"
+                    )
+                    combined_docs.append(table_doc)
+            
+            contexts.append(combined_docs)
+        
+        # Generate answers
+        from app.helpers.llm_reasoner import generate_batch_answer
+        answers = generate_batch_answer(contexts, questions)
+        return answers
 
     async def _process_batches_parallel(self, db, question_batches, max_workers):
         """Process question batches in parallel for maximum efficiency"""

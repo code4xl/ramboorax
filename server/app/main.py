@@ -7,7 +7,12 @@ import json
 import re
 import os
 
+from app.helpers.llm_reasoner import check_nodejs_availability
+
 load_dotenv()
+
+print("🔧 Checking system requirements...")
+check_nodejs_availability()
 
 class FixQuotesMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
